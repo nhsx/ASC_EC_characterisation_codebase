@@ -1,0 +1,749 @@
+---
+title: "EC attendances - social care"
+author: "NHSEI TD AU"
+date: "22/06/2022"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+library(ggplot2)
+library(ggthemes)
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(fig.width=unit(18,"cm"), fig.height=unit(11,"cm"))
+library(tidyverse)
+library(kableExtra)
+
+# connect to sandbox
+library(DBI)
+
+oldw <- getOption("warn")
+options(warn = -1)
+```
+
+
+```{css echo=FALSE}
+/* Define a margin before h2 element */
+h2  {
+  margin-top: 2em;
+}
+/* Define a margin before h3 element */
+h3  {
+  margin-top: 2em;
+}
+/* Define a margin before h4 element */
+h4  {
+  margin-top: 2em;
+}
+/* Define a margin after every first p elements */
+p:first-of-type {
+  margin-bottom: 1em;
+}
+``` 
+
+
+
+
+```{r reference, include=FALSE}
+
+
+con <- dbConnect(odbc::odbc(), "NCDR", timeout = 10)
+
+
+
+### Load reference grouping of chief complaint
+data_grouping <- dbGetQuery(con,
+                            "SELECT *
+                            FROM [NHSE_Reference].[dbo].[tbl_Ref_DataDic_ECDS_Chief_Complaint_Group]")
+data_grouping <- data_grouping %>% select(-Last_Refreshed)
+data_grouping <- data_grouping %>% mutate(ChiefComplaintCode = as.character(ChiefComplaintCode))
+
+
+### Load reference complaint description
+data_complaint <- dbGetQuery(con,
+                             "SELECT [ChiefComplaintCode]
+                             ,[ChiefComplaintDescription]
+                             FROM [NHSE_Reference].[dbo].[tbl_Ref_DataDic_ECDS_Chief_Complaint]")
+data_complaint <- data_complaint %>% mutate(ChiefComplaintCode = as.character(ChiefComplaintCode))
+
+
+### Load acuity
+
+data_acu <- dbGetQuery(con,
+                         "SELECT [AcuityCode]
+                         ,[AcuityDescription]
+                             FROM [NHSE_Reference].[dbo].[tbl_Ref_DataDic_ECDS_Acuity]")
+data_acu <- data_acu %>% mutate(AcuityCode=as.character(AcuityCode))
+
+```
+
+```{r ECDS_data, include=FALSE}
+
+data_EC_pl <- dbGetQuery(con,
+                         "SELECT * FROM
+                         [NHSE_PSDM_0037].[dbo].[MFonseca_EC_MPI_2122_q2bc]")
+
+```
+
+
+
+```{r ECDS_data_preprocess, include=FALSE}
+
+
+enrich <- function(data_EC_pl){
+  
+  data_EC_pl <- data_EC_pl %>% mutate(EC_Chief_Complaint_SNOMED_CT = as.character(EC_Chief_Complaint_SNOMED_CT))
+  
+  data_EC_pl_d <- data_EC_pl %>% left_join(data_complaint,by=c("EC_Chief_Complaint_SNOMED_CT"="ChiefComplaintCode"))
+  
+  data_EC_pl_d <- data_EC_pl_d %>% left_join(data_grouping,by=c("EC_Chief_Complaint_SNOMED_CT"="ChiefComplaintCode"))
+  
+  #data_EC_pl_d <- data_EC_pl_d %>%
+ #   left_join(data_acu, by=c("EC_Acuity_SNOMED_CT"="AcuityCode"))
+  
+}
+
+
+data_EC_pl <- enrich(data_EC_pl)
+
+data_EC_pl <- data_EC_pl %>% rename(care_flag = Care_Home_Flag)
+
+# Create age groups, simplify gender, remove under 18 year olds
+
+data_EC_pl_clean <- data_EC_pl %>%
+  mutate(
+    Der_Age_At_CDS_Activity_Date = as.integer(Der_Age_At_CDS_Activity_Date),
+    age_group = factor(cut(Der_Age_At_CDS_Activity_Date,breaks=c(0,17,44,54,64,74,84,Inf))),
+    age_65 = factor(cut(Der_Age_At_CDS_Activity_Date,breaks=c(0,17,64,Inf))),
+    Sex = factor(case_when(Sex=="1" ~ "Male", Sex=="2" ~ "Female", TRUE ~ "Other/Unknown")),
+    care_flag = ifelse(care_flag==1,"Care","Other")) %>%
+  filter(Der_Age_At_CDS_Activity_Date>=18)
+
+```
+
+
+```{r ECDS_data_q1, include=FALSE}
+
+data_EC_pl_q1 <- dbGetQuery(con,
+                         "SELECT * FROM
+                         [NHSE_PSDM_0037].[dbo].[MFonseca_EC_MPI_2122_q1cde]")
+
+```
+
+
+
+```{r ECDS_data_preprocess_q1, include=FALSE}
+
+
+enrich_q1 <- function(data_EC_pl){
+  
+  data_EC_pl_d <- data_EC_pl %>%
+    left_join(data_acu, by=c("EC_Acuity_SNOMED_CT"="AcuityCode"))
+  
+}
+
+
+data_EC_pl_q1 <- enrich_q1(data_EC_pl_q1)
+
+data_EC_pl_q1 <- data_EC_pl_q1 %>% rename(care_flag = Care_Home_Flag)
+
+# Create age groups, simplify gender, remove under 18 year olds
+
+data_EC_pl_q1_clean <- data_EC_pl_q1 %>%
+  mutate(
+    Der_Age_At_CDS_Activity_Date = as.integer(Der_Age_At_CDS_Activity_Date),
+    age_group = factor(cut(Der_Age_At_CDS_Activity_Date,breaks=c(0,17,44,54,64,74,84,Inf))),
+    age_65 = factor(cut(Der_Age_At_CDS_Activity_Date,breaks=c(0,17,64,Inf))),
+    Sex = factor(case_when(Sex=="1" ~ "Male", Sex=="2" ~ "Female", TRUE ~ "Other/Unknown")),
+    care_flag = ifelse(care_flag==1,"Care","Other")) %>%
+  filter(Der_Age_At_CDS_Activity_Date>=18)
+
+```
+
+
+
+
+
+
+
+
+## Approach
+
+Context: internal analysis to support Adult Social Care Tech and Data policy and strategy, with respect to better identifying the 'third technology' to be funded in the portfolio, alongside DISC and falls technology.
+
+In this rapid exploratory analysis (***not QA'd***), we have looked at the ECDS (emergency care dataset) activity in financial year 21/22.
+
+In terms of identifying those in receipt of social care - full cohort identification may be prohibitive without external data (likely local authority held patient-level information).
+Identification of those in care homes is more feasible. Here we use the restricted master patient index (MPI) dataset, which includes a flag identifying likely care home residents based mainly on NHSAI postcode information. Three matching processes are used to arrive at this - in this analysis all three are considered valid and assigned the "care_flag", though e.g. 3 is acknowledged to come with more uncertainty:
+
+- 1) UPRN to UPRN
+- 2) RI flag and address
+- 3) Postcode to postcode where more than 3 people aged 65+ live
+
+A previous analysis circulated had instead used a proxy to identify those in care homes (and to some extent other social care users) based on existing variables in ECDS itself ( **either** a relevant 'Discharge Destination' code, **or** A relevant 'Attendance Source' code, **or** A relevant Accommodation Status code'). In theory this identifies those in care homes, but data quality/completion issues, hence need for MPI ideally.
+
+For the matching to 21/22 ECDS, we used the national picture on MPI care home status as of July 2021 snapshot (latest available) rather than a month-on-month status follow-up.
+
+Some exclusions from the MPI included those with no pseudo id assigned.
+
+
+## Results
+
+When referring to care home resident in any of the results above, this is with respect to those identified with the proxy 'care_flag'.
+Results cover all emergency care attendances in 21/22 for adults (18+).
+
+
+```{r plot_QA, echo=FALSE, fig.height=20, fig.width=20}
+
+data_EC_pl_clean %>% group_by(care_flag) %>% summarise(n=sum(n)) %>% kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+
+```
+
+### Chief complaint grouping
+
+
+
+#### Pivot table on activity, care flag, age (65 or over), chief complaint
+
+Some of the data, in aggregate form, is available below to inspect.
+Aggregation is done based on chief complaint, care flag, age (65 and over or not). Cases where activity is 5 or under are suppressed and substituted with a * . Sex Unknown is excluded.
+
+```{r pivot_prep, fig.height=20, fig.width=20, include=FALSE}
+
+data_pivot <- data_EC_pl_clean %>%
+  group_by(care_flag,ChiefComplaintGrouping,ChiefComplaintDescription,age_65,Sex) %>%
+  filter(Sex %in% c('Female','Male')) %>%
+  summarise(attendances=sum(n,na.rm=TRUE)) %>% ungroup() %>%
+  mutate(attendances=ifelse(attendances<=5,"*",attendances))
+library(DT)
+
+```
+
+
+```{r pivot_1, fig.width=20,fig.height=20}
+
+
+datatable(data_pivot,
+          filter = 'top', 
+          extensions = 'Buttons',
+          options = list(dom = 'Blfrtip',
+          buttons = c('copy', 'csv', 'pdf', 'print'),
+          lengthMenu = list(c(10,25,50,-1),
+          c(10,25,50,"All"))))
+
+```
+
+
+#### Overview
+
+Below the chief complaint grouping for each attendance is shown, disaggregated by the care_flag.
+
+```{r plot_chief_prep, fig.height=20, fig.width=20, include=FALSE}
+aux_ccg <- data_EC_pl_clean %>% group_by(care_flag,ChiefComplaintGrouping) %>% summarise(n0=sum(n)) %>% arrange(care_flag,desc(n0))
+aux_ccg$ChiefComplaintGrouping <- factor(aux_ccg$ChiefComplaintGrouping,levels=unique(aux_ccg$ChiefComplaintGrouping))
+
+
+data_EC_pl_clean$ChiefComplaintGrouping <- factor(data_EC_pl_clean$ChiefComplaintGrouping,unique(aux_ccg$ChiefComplaintGrouping))
+
+```
+
+
+```{r plot_chief, fig.width=20,fig.height=20}
+
+ggplot(data = aux_ccg %>% filter(!is.na(care_flag))) +
+  geom_bar(aes(x=ChiefComplaintGrouping,y=n0),stat="identity")+
+  facet_wrap(~care_flag,ncol=1,scales="free")+
+  labs(y="Count")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        text=element_text(size=22))
+
+
+```
+
+
+#### Chief complaint grouping - comparison to remaining cohort
+
+
+Relative differences on chief complaint goruping occurrence between the cohorts are highlighted below. The latter graph focusses on those 65+ only.
+
+```{r prep_ccg, fig.height=20, fig.width=20, include=FALSE}
+aux <- data_EC_pl_clean %>% group_by(care_flag,ChiefComplaintDescription) %>% summarise(n0=sum(n)) %>% arrange(care_flag,desc(n0))
+
+
+
+aux_ccg <- data_EC_pl_clean %>%
+  group_by(care_flag,ChiefComplaintGrouping,age_65,age_group,Sex) %>%
+  summarise(n0=sum(n)) %>%
+  ungroup() %>%
+  group_by(care_flag) %>%
+  mutate(perc = n0/sum(n0)) %>% ungroup()
+
+
+
+aux_ccg_65 <- data_EC_pl_clean %>%
+  filter(age_65=="(64,Inf]") %>%
+  group_by(care_flag,ChiefComplaintGrouping) %>%
+  summarise(n0=sum(n)) %>%
+  ungroup() %>%
+  group_by(care_flag) %>%
+  mutate(perc = n0/sum(n0)) %>% ungroup()
+```
+
+```{r plot_ccg_rel, echo=FALSE, fig.height=20, fig.width=20}
+
+
+ggplot(data = aux_ccg %>% filter(!is.na(care_flag)),
+       aes(x=ChiefComplaintGrouping,y=perc*100,fill=care_flag)) +
+  stat_summary(geom = "bar",fun="sum",position = position_dodge(0.95))+
+  #facet_wrap(~care_flag,ncol=1,scales="free")+
+  labs(y="% of all attendances for this cohort",title="Chief Complaint Groups, as % of all attendances for that cohort")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        text=element_text(size=22))+
+  coord_flip()
+
+
+ggplot(data = aux_ccg_65 %>% filter(!is.na(care_flag)),
+       aes(x=ChiefComplaintGrouping,y=perc*100,fill=care_flag)) +
+  stat_summary(geom = "bar",fun="sum",position = position_dodge(0.95))+
+  #facet_wrap(~care_flag,ncol=1,scales="free")+
+  labs(y="% of all attendances for this cohort",title="Chief Complaint Groups, as % of all attendances for that cohort",subtitle="65+ only")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        text=element_text(size=22))+
+  coord_flip()
+
+
+```
+
+
+
+
+
+### Chief complaint description
+
+Below the top 15 chief complaints for those with a care flag are shown (among ca. 142 codes).
+
+```{r prep_ccd, fig.height=20, fig.width=20, include=FALSE}
+aux <- data_EC_pl_clean %>% group_by(care_flag,ChiefComplaintDescription) %>% summarise(n0=sum(n)) %>% arrange(care_flag,desc(n0))
+aux$ChiefComplaintDescription <- factor(aux$ChiefComplaintDescription,levels=unique(aux$ChiefComplaintDescription))
+
+top15care <- aux %>% filter(!is.na(ChiefComplaintDescription)) %>% .$ChiefComplaintDescription %>% as.character() %>% .[1:15]
+
+
+aux_sd <- data_EC_pl_clean %>%
+  group_by(care_flag,ChiefComplaintDescription,age_group,Sex,Care_Home_Service_Type) %>%
+  summarise(n0=sum(n)) %>%
+  ungroup() %>%
+  group_by(care_flag) %>%
+  mutate(perc = n0/sum(n0)) %>% ungroup()
+aux_sd$ChiefComplaintDescription <- factor(aux_sd$ChiefComplaintDescription,levels=unique(aux$ChiefComplaintDescription))
+```
+
+```{r plot_complaint, eval=FALSE, fig.height=20, fig.width=20, include=FALSE}
+
+
+ggplot(data = aux %>% filter(ChiefComplaintDescription %in% top15care,care_flag=="Care")) +
+  geom_bar(aes(x=ChiefComplaintDescription,y=n0),stat="sum")+
+  facet_wrap(~care_flag,ncol=1,scales="free")+
+  labs(y="Count",title="Top chief complaints for those with care home flag")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        text=element_text(size=22))+
+  coord_flip()
+
+
+```
+
+#### Chief complaint description - comparison to remaining cohort
+
+Below the top 15 chief complaints for those with a care flag are shown, as relative frequency among the complaints. The relative frequency of these diagnoses for non-care cohort is also shown. Those with no MPI match excluded.
+
+```{r plot_complaint_rel, fig.width=20,fig.height=20}
+
+
+ggplot(data = aux_sd %>% filter(ChiefComplaintDescription %in% top15care, !is.na(care_flag)),
+       aes(x=ChiefComplaintDescription,y=perc*100,fill=care_flag)) +
+  stat_summary(geom = "bar",fun="sum",position = position_dodge(0.95))+
+  #facet_wrap(~care_flag,ncol=1,scales="free")+
+  labs(y="% of all attendances for this cohort",title="Top Chief Complaints for those with social care flag, as % of all attendances for that cohort")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        text=element_text(size=22))+
+  coord_flip()
+
+
+```
+
+
+#### Chief complaint diagnosis (care cohort) - breakdown by age groups
+
+The breakdown by age is made explicit below.
+
+```{r plot_complaint_rel_age, fig.width=20,fig.height=20}
+
+
+ggplot(data = aux_sd %>% filter(ChiefComplaintDescription %in% top15care,care_flag=="Care"),
+       aes(x=ChiefComplaintDescription,y=n0,fill=age_group)) +
+  stat_summary(geom = "bar",fun="sum",position="stack")+
+  #facet_wrap(~care_flag,ncol=1,scales="free")+
+  labs(y="no attendances for this cohort",title="Top Chief Complaints for those with social care flag - age group breakdown")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        text=element_text(size=22))+
+  coord_flip()+
+  scale_fill_brewer(palette = "BrBG",na.value="grey90")
+  #theme_economist()
+
+ggplot(data = aux_sd %>% filter(ChiefComplaintDescription %in% top15care,care_flag=="Care"),
+       aes(x=ChiefComplaintDescription,y=n0,fill=age_group)) +
+  stat_summary(geom = "bar",fun="sum",position="fill")+
+  #facet_wrap(~care_flag,ncol=1,scales="free")+
+  labs(y="% attendances for this cohort",title="Top Chief Complaints for those with social care flag - age group breakdown")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        text=element_text(size=22))+
+  coord_flip()+
+  scale_fill_brewer(palette = "BrBG")
+  #theme_economist()
+
+```
+
+#### Chief complaint diagnosis (care cohort) - breakdown by gender
+
+Breakdown by gender is shown.
+
+```{r plot_complaint_rel_sex, fig.width=20,fig.height=20}
+
+
+ggplot(data = aux_sd %>% filter(ChiefComplaintDescription %in% top15care,care_flag=="Care"),
+       aes(x=ChiefComplaintDescription,y=n0,fill=Sex)) +
+  stat_summary(geom = "bar",fun="sum",position="stack")+
+  #facet_wrap(~care_flag,ncol=1,scales="free")+
+  labs(y="no attendances for this cohort",title="Top Chief Complaints for those with social care flag - sex breakdown")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        text=element_text(size=22))+
+  coord_flip()
+
+
+ggplot(data = aux_sd %>% filter(ChiefComplaintDescription %in% top15care,care_flag=="Care"),
+       aes(x=ChiefComplaintDescription,y=n0,fill=Sex)) +
+  stat_summary(geom = "bar",fun="sum",position="fill")+
+  #facet_wrap(~care_flag,ncol=1,scales="free")+
+  labs(y="% attendances for this cohort",title="Top Chief Complaints for those with social care flag - sex breakdown")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        text=element_text(size=22))+
+  coord_flip()
+
+```
+
+
+#### Chief complaint diagnosis (care cohort) - breakdown by care home type
+
+Breakdown by care home type (where known) is shown.
+
+```{r plot_complaint_rel_type, fig.width=20,fig.height=20}
+
+
+#ggplot(data = aux_sd %>% filter(ChiefComplaintDescription %in% top15care,care_flag=="Care"),
+#       aes(x=ChiefComplaintDescription,y=n0,fill=Care_Home_Service_Type)) +
+#  stat_summary(geom = "bar",fun="sum",position="stack")+
+#  #facet_wrap(~care_flag,ncol=1,scales="free")+
+#  labs(y="no attendances for this cohort",title="Top Chief Complaints for those with social care flag - service type breakdown")+
+#  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+#        text=element_text(size=22))+
+#  coord_flip()
+
+
+ggplot(data = aux_sd %>% filter(ChiefComplaintDescription %in% top15care,care_flag=="Care"),
+       aes(x=ChiefComplaintDescription,y=n0,fill=Care_Home_Service_Type)) +
+  stat_summary(geom = "bar",fun="sum",position="fill")+
+  #facet_wrap(~care_flag,ncol=1,scales="free")+
+  labs(y="% attendances for this cohort",title="Top Chief Complaints for those with social care flag - service type breakdown")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        text=element_text(size=22))+
+  coord_flip()
+
+```
+
+
+
+
+### Location (CCG) considerations
+
+
+#### Overview
+
+Instances of attendances by CCG of residence are shown, ordered from the CC of residence with most EC attendances to the one with least.
+
+```{r plot_CCG, fig.width=15,fig.height=20}
+
+
+aux_CCG <- data_EC_pl_clean %>%  group_by(care_flag,CCG_of_Residence) %>% summarise(n0=sum(n)) %>% arrange(care_flag,desc(n0))
+aux_CCG$CCG_of_Residence <- factor(aux_CCG$CCG_of_Residence,levels=unique(aux_CCG$CCG_of_Residence))
+data_EC_pl_clean$CCG_of_Residence <- factor(data_EC_pl_clean$CCG_of_Residence,levels=unique(aux_CCG$CCG_of_Residence))
+
+ggplot(data = aux_CCG %>% filter(!is.na(care_flag)),
+       aes(x=CCG_of_Residence,y=n0,fill=care_flag)) +
+  stat_summary(geom = "bar",fun="sum",position="stack")+
+  facet_wrap(~care_flag,scales="free_x")+
+  labs(y="no attendances for this cohort",title="CCG view")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        text=element_text(size=20))+coord_flip()
+
+
+```
+
+
+#### Location (CCG) considerations and Chief Complaint Grouping
+
+
+```{r plot_CCG_ccg, fig.width=15,fig.height=20}
+
+
+
+ggplot(data = data_EC_pl_clean %>% filter(care_flag=="Care",!is.na(ChiefComplaintGrouping)),
+       aes(x=CCG_of_Residence,y=n,fill=ChiefComplaintGrouping)) +
+  stat_summary(geom = "bar",fun="sum",position="fill",color="black")+
+  facet_wrap(~care_flag,scales="free_x")+
+  labs(y="% attendances for this cohort",title="Emergency care department breakdown",caption="N/A chief complaint groupings removed")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        text=element_text(size=22))+coord_flip()
+
+```
+
+#### Pivot table of CCG , Care Home Status, Chief Complaint Grouping, age (65+ or not)
+
+```{r pivot_prep_CCG, fig.height=20, fig.width=20, include=FALSE}
+
+data_pivot_CCG <- data_EC_pl_clean %>%
+  group_by(care_flag,CCG_of_Residence,Care_Home_Service_Type,ChiefComplaintGrouping,age_65) %>%
+  filter(Sex %in% c('Female','Male')) %>%
+  summarise(attendances=sum(n,na.rm=TRUE)) %>% ungroup() %>%
+  mutate(attendances=ifelse(attendances<=5,"*",attendances))
+
+
+```
+
+
+```{r pivot_1_CCG, fig.width=20,fig.height=20}
+
+
+datatable(data_pivot_CCG,
+          filter = 'top', 
+          extensions = 'Buttons',
+          options = list(dom = 'Blfrtip',
+          buttons = c('copy', 'csv', 'pdf', 'print'),
+          lengthMenu = list(c(10,25,50,-1),
+          c(10,25,50,"All"))))
+
+```
+
+### Activity by emergency care department type
+
+The breakdown by emergency care department type is shown below. NA reflects where data is unavailable.
+
+
+```{r plot_ECD, fig.width=15,fig.height=15}
+
+
+
+ggplot( data = data_EC_pl_q1_clean %>%
+  group_by(care_flag,Pat_Der_Dimention_1) %>%
+  summarise(n0=sum(n)) %>%
+  ungroup() %>%
+  group_by(care_flag) %>%
+  mutate(perc = n0/sum(n0)) %>% ungroup() %>% filter(!is.na(care_flag)) ,
+  aes(x=Pat_Der_Dimention_1,y=perc*100,fill=care_flag)) +
+  stat_summary(geom = "bar",fun="sum",position= position_dodge(0.90))+
+  #facet_wrap(~care_flag,scales="free_x")+
+  labs(y="% attendances for this cohort",title="Emergency care department breakdown",x="EC Department type")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        text=element_text(size=22))
+
+
+
+ggplot( data = data_EC_pl_q1_clean %>%
+          filter(Der_Age_At_CDS_Activity_Date>=65) %>%
+  group_by(care_flag,Pat_Der_Dimention_1) %>%
+  summarise(n0=sum(n)) %>%
+  ungroup() %>%
+  group_by(care_flag) %>%
+  mutate(perc = n0/sum(n0)) %>% ungroup() %>% filter(!is.na(care_flag)) ,
+  aes(x=Pat_Der_Dimention_1,y=perc*100,fill=care_flag)) +
+  stat_summary(geom = "bar",fun="sum",position= position_dodge(0.90))+
+  #facet_wrap(~care_flag,scales="free_x")+
+  labs(y="% attendances for this cohort",title="Emergency care department breakdown",subtitle = "65+",x="EC Department type")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        text=element_text(size=22))
+
+
+```
+
+
+#### Pivot table with aggregates by CCG , EC department type, care home flag, age (65+ or not)
+
+```{r pivot_prep_edtype, fig.height=20, fig.width=20, include=FALSE}
+
+data_pivot_temp <- data_EC_pl_q1_clean %>%
+  filter(!is.na(care_flag)) %>%
+  group_by(care_flag,CCG_of_Residence,Pat_Der_Dimention_1,age_65) %>%
+  rename(EC_department_type = Pat_Der_Dimention_1) %>%
+  filter(Sex %in% c('Female','Male')) %>%
+  summarise(attendances=sum(n,na.rm=TRUE)) %>% ungroup() %>%
+  mutate(attendances=ifelse(attendances<=5,"*",attendances))
+
+
+```
+
+
+```{r pivot_1_edtype, fig.width=20,fig.height=20}
+
+
+datatable(data_pivot_temp,
+          filter = 'top', 
+          extensions = 'Buttons',
+          options = list(dom = 'Blfrtip',
+          buttons = c('copy', 'csv', 'pdf', 'print'),
+          lengthMenu = list(c(10,25,50,-1),
+          c(10,25,50,"All"))))
+
+```
+
+
+
+### Activity by acuity
+
+The breakdown by acuity is shown below. NA reflects where data is unavailable.
+
+
+```{r plot_acuity, fig.width=15,fig.height=15}
+
+ggplot( data = data_EC_pl_q1_clean %>%
+  group_by(care_flag,AcuityDescription) %>%
+  summarise(n0=sum(n)) %>%
+  ungroup() %>%
+  group_by(care_flag) %>%
+  mutate(perc = n0/sum(n0)) %>% ungroup() %>% filter(!is.na(care_flag)) ,
+  aes(x=AcuityDescription,y=perc*100,fill=care_flag)) +
+  stat_summary(geom = "bar",fun="sum",position= position_dodge(0.90))+
+  #facet_wrap(~care_flag,scales="free_x")+
+  labs(y="% attendances for this cohort",title="Emergency care acuity breakdown",x="Acuity")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        text=element_text(size=22))
+
+
+
+ggplot( data = data_EC_pl_q1_clean %>%
+          filter(Der_Age_At_CDS_Activity_Date>=65) %>%
+  group_by(care_flag,AcuityDescription) %>%
+  summarise(n0=sum(n)) %>%
+  ungroup() %>%
+  group_by(care_flag) %>%
+  mutate(perc = n0/sum(n0)) %>% ungroup() %>% filter(!is.na(care_flag)) ,
+  aes(x=AcuityDescription,y=perc*100,fill=care_flag)) +
+  stat_summary(geom = "bar",fun="sum",position= position_dodge(0.90))+
+  #facet_wrap(~care_flag,scales="free_x")+
+  labs(y="% attendances for this cohort",title="Emergency care acuity breakdown",subtitle = "65+",x="Acuity")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        text=element_text(size=22))
+
+```
+
+
+#### Pivot table with aggregates by CCG , acuity, care home flag, age (65+ or not)
+
+```{r pivot_prep_acu, fig.height=20, fig.width=20, include=FALSE}
+
+data_pivot_temp <- data_EC_pl_q1_clean %>%
+  filter(!is.na(care_flag)) %>%
+  group_by(care_flag,CCG_of_Residence,AcuityDescription,age_65) %>%
+  filter(Sex %in% c('Female','Male')) %>%
+  summarise(attendances=sum(n,na.rm=TRUE)) %>% ungroup() %>%
+  mutate(attendances=ifelse(attendances<=5,"*",attendances))
+
+
+```
+
+
+```{r pivot_1_acu, fig.width=20,fig.height=20}
+
+
+datatable(data_pivot_temp,
+          filter = 'top', 
+          extensions = 'Buttons',
+          options = list(dom = 'Blfrtip',
+          buttons = c('copy', 'csv', 'pdf', 'print'),
+          lengthMenu = list(c(10,25,50,-1),
+          c(10,25,50,"All"))))
+
+```
+
+
+### Outcome
+
+The breakdown by outcome from attendance is shown below. NA reflects where data is unavailable.
+
+
+```{r plot_outcome, fig.width=15,fig.height=15}
+
+ggplot( data = data_EC_pl_q1_clean %>%
+  group_by(care_flag,Pat_Der_Dimention_6) %>%
+  summarise(n0=sum(n)) %>%
+  ungroup() %>%
+  group_by(care_flag) %>%
+  mutate(perc = n0/sum(n0)) %>% ungroup() %>% filter(!is.na(care_flag)) ,
+  aes(x=Pat_Der_Dimention_6,y=perc*100,fill=care_flag)) +
+  stat_summary(geom = "bar",fun="sum",position= position_dodge(0.90))+
+  #facet_wrap(~care_flag,scales="free_x")+
+  labs(y="% attendances for this cohort",title="Emergency care outcome breakdown",x="EC Outcome")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        text=element_text(size=22))
+
+
+
+ggplot( data = data_EC_pl_q1_clean %>%
+          filter(Der_Age_At_CDS_Activity_Date>=65) %>%
+  group_by(care_flag,Pat_Der_Dimention_6) %>%
+  summarise(n0=sum(n)) %>%
+  ungroup() %>%
+  group_by(care_flag) %>%
+  mutate(perc = n0/sum(n0)) %>% ungroup() %>% filter(!is.na(care_flag)) ,
+  aes(x=Pat_Der_Dimention_6,y=perc*100,fill=care_flag)) +
+  stat_summary(geom = "bar",fun="sum",position= position_dodge(0.90))+
+  #facet_wrap(~care_flag,scales="free_x")+
+  labs(y="% attendances for this cohort",title="Emergency care outcome breakdown",subtitle = "65+",x="EC Outcome")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        text=element_text(size=22))
+
+```
+
+
+#### Pivot table with aggregates by CCG , attendance outcome, care home flag, age (65+ or not)
+
+```{r pivot_prep_out, fig.height=20, fig.width=20, include=FALSE}
+
+data_pivot_temp <- data_EC_pl_q1_clean %>%
+  filter(!is.na(care_flag)) %>%
+  group_by(care_flag,CCG_of_Residence,Pat_Der_Dimention_6,age_65) %>%
+  rename(attendance_outcome = Pat_Der_Dimention_6) %>%
+  filter(Sex %in% c('Female','Male')) %>%
+  summarise(attendances=sum(n,na.rm=TRUE)) %>% ungroup() %>%
+  mutate(attendances=ifelse(attendances<=5,"*",attendances))
+
+
+```
+
+
+```{r pivot_1_out, fig.width=20,fig.height=20}
+
+
+datatable(data_pivot_temp,
+          filter = 'top', 
+          extensions = 'Buttons',
+          options = list(dom = 'Blfrtip',
+          buttons = c('copy', 'csv', 'pdf', 'print'),
+          lengthMenu = list(c(10,25,50,-1),
+          c(10,25,50,"All"))))
+
+```
+
