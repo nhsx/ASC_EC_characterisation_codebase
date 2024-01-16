@@ -8,7 +8,7 @@ Discovery piece on identifying patterns and needs in the use of emergency care /
 
 Sharepoint folder (Digital Analytics Research Team): `Documents - NHSX Analytics Unit\Prog..anch\Analytics Team\Social Care\falls and third tech`
 
-Contacts: Emma Lenden, Digitising Social Care programme
+Contacts: Digitising Social Care programme
 
 Analysis team: legacy Digital Analytics and Research Team (DART)
  
